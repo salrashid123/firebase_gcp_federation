@@ -1,0 +1,180 @@
+
+{% extends "layout.html" %}
+{% block title %}Partner Portal{% endblock %}
+{% block head %}
+  {{ super() }}
+
+
+  <script>
+    firebase.auth().getRedirectResult()
+      .then((result) => {
+      if (result.credential) {   
+         var token = result.credential.accessToken;
+      }
+    })
+    .catch((error) => {
+      console.log(error);
+    });
+  </script>
+
+  <script type="text/javascript">
+
+    firebase.auth().onAuthStateChanged(function(user) {
+      if (user) {   
+        //console.log(user);
+        email = user.email;
+        document.getElementById("footer_username").innerHTML=email;
+        console.log(JSON.stringify(user,null, 2));
+        //document.getElementById("user_details").innerText=JSON.stringify(user,null, 2);
+        var csrf_token = "{{ csrf_token() }}";               
+        
+        firebase.auth().currentUser.getIdToken(true).then(function(idToken) {
+
+          var data = new FormData();
+          data.append("id_token", idToken);
+          var details = {
+              'id_token': idToken
+          };
+          document.getElementById("id_token").innerText = idToken;
+          var formBody = [];
+          for (var property in details) {
+            var encodedKey = encodeURIComponent(property);
+            var encodedValue = encodeURIComponent(details[property]);
+            formBody.push(encodedKey + "=" + encodedValue);
+          }
+          formBody = formBody.join("&");
+
+          fetch('/verifyIdToken', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+              'X-CSRFToken': csrf_token
+            },
+            body: formBody
+          }).then(response => response.json())
+            .then(data =>  {
+               console.log('User Verified: ' + data['uid'] );
+               var project_id=data['project_id']
+               var project_number=data['project_number']
+               document.getElementById("server_sts_token").innerText = data['sts_token'];
+
+               // now use the (server-side provided) federated token to make a GCP API Call
+               // curl -H "Authorization: Bearer $STS_TOKEN" https://pubsub.googleapis.com/v1/projects/$PROJECT_ID/topics
+               fetch('https://pubsub.googleapis.com/v1/projects/' + project_id + '/topics', {
+                method: 'GET',
+                headers: {
+                  'Authorization': 'Bearer ' + data['sts_token'],
+                }
+              }).then(response => response.json())
+                .then(data =>  {
+                  console.log('Topics (server-side)' + JSON.stringify(data) );
+                  document.getElementById("server_pubsub_topics").innerText=JSON.stringify(data,null, 2);
+              });
+
+              // alternatively, get the STS token client-side 
+              var GCP_OIDC_STS_ENDPOINT         = "https://sts.googleapis.com/v1beta/token";
+              var GCP_OIDC_CLOUD_PLATFORM_SCOPE = "https://www.googleapis.com/auth/cloud-platform";
+              var GCP_AUDIENCE = "//iam.googleapis.com/projects/" + project_number + "/locations/global/workloadIdentityPools/oidc-pool-1/providers/oidc-provider-1";
+              var details = {
+                'grant_type':'urn:ietf:params:oauth:grant-type:token-exchange',
+                'audience': GCP_AUDIENCE,
+                'subject_token_type': 'urn:ietf:params:oauth:token-type:jwt',
+                'requested_token_type': 'urn:ietf:params:oauth:token-type:access_token',
+                'scope': GCP_OIDC_CLOUD_PLATFORM_SCOPE,
+                'subject_token': idToken
+              };
+              var formBody = [];
+              for (var property in details) {
+                var encodedKey = encodeURIComponent(property);
+                var encodedValue = encodeURIComponent(details[property]);
+                formBody.push(encodedKey + "=" + encodedValue);
+              }
+              formBody = formBody.join("&");
+              fetch('https://sts.googleapis.com/v1beta/token', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: formBody
+              }).then(response => response.json())
+                .then(sdata =>  {
+                  console.log('STS Response ' + JSON.stringify(sdata) );
+                  var sts_token = sdata['access_token']
+                  document.getElementById("client_sts_token").innerText=sts_token;
+                  fetch('https://pubsub.googleapis.com/v1/projects/' + project_id + '/topics', {
+                    method: 'GET',
+                    headers: {
+                      'Authorization': 'Bearer ' + sts_token,
+                    }
+                  }).then(response => response.json())
+                    .then(data =>  {
+                      console.log('Topics (client-side) ' + JSON.stringify(data) );
+                      document.getElementById("client_pubsub_topics").innerText=JSON.stringify(data,null, 2);
+                  });                  
+                  });
+          });
+        }).catch(function(error) {
+          alert("Unable to get ID token for current sesson: " + error);
+          console.log("Unable to get ID token for current session:");
+        });  
+      } else {
+        console.log("User not logged in");
+        window.location.href='/login';
+      }
+    });
+    </script>
+
+{% endblock %}
+{% block content %}
+
+
+  <h4>Service Provider Portal Page</h4>
+
+<hr/>
+
+<table>
+  <tr>
+    <td><pre class="mdl-textfield">id_token</pre></td>
+    <td>
+      <textarea class="mdl-textfield" type="text" id="id_token" name="id_token" ></textarea>
+    </td>
+  </div>
+
+  </tr>
+
+  <tr>
+    <td><pre class="mdl-textfield">server_sts_token</pre></td>
+    <td>
+      <textarea class="mdl-textfield" type="text" id="server_sts_token" name="server_sts_token" ></textarea>
+    </td>
+  </tr>
+
+
+  <tr>
+    <td><pre class="mdl-textfield">client_sts_token</pre></td>
+    <td>
+      <textarea class="mdl-textfield" id="client_sts_token" name="client_sts_token" ></textarea> 
+    </td>
+  </tr>
+
+  <tr>
+    <td><pre class="mdl-textfield">server_pubsub_topics</pre></td>
+    <td>
+      <pre class="mdl-textfield"   id="server_pubsub_topics" name="server_pubsub_topics" ></pre> 
+    </td>
+  </tr>
+
+  <tr>
+    <td><pre class="mdl-textfield">client_pubsub_topics</pre></td>
+    <td>
+      <pre class="mdl-textfield"  id="client_pubsub_topics" name="client_pubsub_topics"  ></pre> 
+    </td>
+  </tr>
+
+
+</table>
+
+
+
+
+{% endblock %}
